@@ -1,0 +1,5 @@
+{
+  "pollIntervalMs": 5000,
+  "priceDiffThresholdBps": 30,
+  "maxPathLength": 8
+}
