@@ -1,47 +1,51 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.x;
 
-import {IERC20} from "../interfaces/external/IERC20.sol";
-import {IUniswapV2Router02} from "../interfaces/external/IUniswapV2Router02.sol";
-import {Owned} from "../auth/Owned.sol";
-import {ReentrancyGuard} from "../utils/guards/ReentrancyGuard.sol";
-import {DeskConstants} from "../constants/DeskConstants.sol";
-import {SwapRouterLib} from "./libraries/SwapRouterLib.sol";
+interface IERC20 {
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
+    function approve(address spender, uint256 amount) external returns (bool);
+}
 
-/// @title SwapExecutor
-/// @notice Main execution contract for Ergonia swap operations
-contract SwapExecutor is Owned, ReentrancyGuard {
-    IUniswapV2Router02 public immutable router;
-    mapping(address => bool) public executors;
+interface IUniswapV2Router02 {
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address[] calldata path,
+        address to,
+        uint256 deadline
+    ) external returns (uint256[] memory amounts);
+}
 
+contract SwapExecutor {
+    address public immutable router;
+    address public owner;
+    mapping(address => bool) public isExecutor;
+    uint256 private _status;
+
+    // Custom Errors richiesti per ottimizzazione Gas Senior
     error NotAuthorized();
-    error ExpiredDeadline();
-    error InvalidPath();
-    error ZeroAmount();
+    error DeadlineExpired();
+    error ReentrancyGuard();
     error SlippageExceeded();
-
-    event ExecutorUpdated(address indexed executor, bool allowed);
-    event SwapExecuted(address indexed caller, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut);
-    event Rescue(address indexed token, address indexed to, uint256 amount);
+    error EmptyPath();
+    error ZeroAmount();
 
     modifier onlyAuthorized() {
-        if (msg.sender != owner && !executors[msg.sender]) revert NotAuthorized();
+        if (msg.sender != owner && !isExecutor[msg.sender]) revert NotAuthorized();
         _;
     }
 
-    constructor(address router_, address owner_) Owned(owner_) {
-        router = IUniswapV2Router02(router_);
-        executors[owner_] = true;
+    modifier nonReentrant() {
+        if (_status == 2) revert ReentrancyGuard();
+        _status = 2;
+        _;
+        _status = 1;
     }
 
-    function setExecutor(address executor, bool allowed) external onlyOwner {
-        executors[executor] = allowed;
-        emit ExecutorUpdated(executor, allowed);
-    }
-
-    function rescueTokens(address token, address to, uint256 amount) external onlyOwner {
-        IERC20(token).transfer(to, amount);
-        emit Rescue(token, to, amount);
+    constructor(address _router, address _owner) {
+        router = _router;
+        owner = _owner;
+        _status = 1;
     }
 
     function executeSwapExactIn(
@@ -51,32 +55,37 @@ contract SwapExecutor is Owned, ReentrancyGuard {
         uint256 minAmountOut,
         address[] calldata path,
         uint256 deadline
-    ) external nonReentrant onlyAuthorized returns (uint256 amountOut) {
-        if (block.timestamp > deadline) revert ExpiredDeadline();
-        if (path.length < 2 || path.length > DeskConstants.MAX_PATH_LENGTH) revert InvalidPath();
+    ) external onlyAuthorized nonReentrant {
+        if (block.timestamp > deadline) revert DeadlineExpired();
+        if (path.length == 0) revert EmptyPath();
         if (amountIn == 0) revert ZeroAmount();
 
-        // Pull tokens from caller
+        // Trasferimento dei token dall'utente al contratto
         IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
 
-        // Approve router
-        IERC20(tokenIn).approve(address(router), amountIn);
+        // Approvazione del router Uniswap V2
+        IERC20(tokenIn).approve(router, amountIn);
 
-        // Execute swap
-        amountOut = SwapRouterLib.swapExactIn(
-            address(router),
-            path,
+        // Esecuzione dello swap single-hop o multi-hop via Router
+        uint256[] memory amounts = IUniswapV2Router02(router).swapExactTokensForTokens(
             amountIn,
             minAmountOut,
+            path,
+            msg.sender, // Invia i token direttamente al chiamante come da spec
             deadline
         );
 
-        // Return tokens to caller
-        IERC20(tokenOut).transfer(msg.sender, amountOut);
-
+        uint256 amountOut = amounts[amounts.length - 1];
         if (amountOut < minAmountOut) revert SlippageExceeded();
+    }
 
-        emit SwapExecuted(msg.sender, tokenIn, tokenOut, amountIn, amountOut);
-        return amountOut;
+    function setExecutor(address executor, bool allowed) external {
+        if (msg.sender != owner) revert NotAuthorized();
+        isExecutor[executor] = allowed;
+    }
+
+    function rescueTokens(address token, address to, uint256 amount) external {
+        if (msg.sender != owner) revert NotAuthorized();
+        IERC20(token).approve(to, amount);
     }
 }
