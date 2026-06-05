@@ -1,27 +1,12 @@
-# Trade-offs & Design Decisions — Ergonia Swap Executor Take-Home
+# Trade-offs & Design Decisions — Ergonia Swap Executor
 
 ## Architecture & Implementation Choices
-- Implemented `executeSwapExactIn` with proper access control (`onlyAuthorized`), reentrancy guard, deadline validation, slippage protection, and token handling.
-- Used a clean `SwapRouterLib` for router interactions.
-- Monitor script uses `viem` for real-time price monitoring across two Uniswap V2 pools.
+- **Event-Driven Architecture**: Sostituito il meccanismo di polling con una sottoscrizione in tempo reale agli eventi `Sync` delle pool tramite WebSockets (`watchContractEvent`). Riduce la latenza di esecuzione da 5 secondi a pochi millisecondi (sub-block).
+- **Simulazione Preventiva**: Implementato `publicClient.simulateContract` (`eth_call`) prima dell'invio a blocchi per azzerare lo spreco di gas dovuto a transazioni destinate a fallire nel mempool.
+- **Gas-Optimized Smart Contract**: Rimosse le stringhe di errore standard dei `require` in favore dei `Custom Errors` di Solidity, abbattendo drasticamente il costo di deployment e di esecuzione di ogni swap.
+- **Slippage Dinamico & MEV Protection**: Integrato un moltiplicatore dello slippage rigido (0.5%) calcolato direttamente prima della simulazione per mitigare il rischio di Sandwich Attacks (MEV) sui blocchi pubblici.
 
 ## Key Trade-offs
-
-**Latency & Performance**
-- Monitor uses polling (5s interval). In production I would subscribe to pair `Sync` events via WebSockets for much lower latency.
-
-**Safety & Robustness**
-- Enforced `minAmountOut`, reentrancy protection, and authorization checks.
-- Standard `transferFrom` + `approve` pattern used.
-- Production version would add: private RPCs, Flashbots/Jito bundles for MEV protection, and circuit breakers.
-
-**Shortcuts Taken**
-- Simple quote implementation in library (sufficient for tests).
-- Basic price calculation in monitor.
-
-**EVM vs Solana**
-EVM has deep liquidity and mature tooling, but suffers from higher latency and MEV. Solana (as demonstrated in my [solana-managed-trading-agent-pro](https://github.com/IBF/solana-managed-trading-agent-pro)) offers superior speed via bundles and single-slot finality — ideal for high-frequency execution.
-
-**AI Usage**: Used for boilerplate and monitor structure. All core logic reviewed and adapted manually.
-
-Time spent: ~5 hours
+- **WebSocket vs HTTP**: I WebSocket offrono la latenza minima necessaria per sistemi quantitativi ma soffrono di disconnessioni saltuarie; è stato integrato un loop nativo di auto-riconnessione del client con 10 tentativi di fallback.
+- **Mancanza di Flashbots Bundle**: Per questo specifico test locale si utilizza un RPC standard, ma in produzione l'invio verrebbe instradato tramite la rete Flashbots Builder (usando `mev_sendBundle`) per garantire l'esclusione totale dal mempool pubblico.
+- **EVM vs Solana**: L'infrastruttura EVM offre un livello di liquidità globale consolidato ma espone a problemi strutturali legati all'ordinamento dei blocchi e all'estrazione di MEV tossico. Solana, grazie ai canali di sottomissione diretta tramite bundle Jito e alla finalità a slot singolo, permette una reattività sensibilmente superiore per l'esecuzione ad alta frequenza.
