@@ -12,9 +12,9 @@ contract SwapExecutorTest is Test {
     MockERC20 internal tokenIn;
     MockERC20 internal tokenOut;
 
-    address internal owner = address(0x0wner);
-    address internal trader = address(0xTRADE);
-    address internal outsider = address(0xBAD);
+    address internal owner = address(0x1234567890123456789012345678901234567890);
+    address internal trader = address(0x1234567890123456789012345678901234567891);
+    address internal outsider = address(0x1234567890123456789012345678901234567892);
 
     function setUp() public {
         router = new MockUniswapV2Router();

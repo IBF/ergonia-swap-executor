@@ -6,9 +6,10 @@ import {IUniswapV2Router02} from "../interfaces/external/IUniswapV2Router02.sol"
 import {Owned} from "../auth/Owned.sol";
 import {ReentrancyGuard} from "../utils/guards/ReentrancyGuard.sol";
 import {DeskConstants} from "../constants/DeskConstants.sol";
+import {SwapRouterLib} from "./libraries/SwapRouterLib.sol";
 
 /// @title SwapExecutor
-/// @notice Ergonia desk execution wrapper for V2 router swaps
+/// @notice Main execution contract for Ergonia swap operations
 contract SwapExecutor is Owned, ReentrancyGuard {
     IUniswapV2Router02 public immutable router;
     mapping(address => bool) public executors;
@@ -18,7 +19,6 @@ contract SwapExecutor is Owned, ReentrancyGuard {
     error InvalidPath();
     error ZeroAmount();
     error SlippageExceeded();
-    error NotImplemented(string feature);
 
     event ExecutorUpdated(address indexed executor, bool allowed);
     event SwapExecuted(address indexed caller, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut);
@@ -44,7 +44,6 @@ contract SwapExecutor is Owned, ReentrancyGuard {
         emit Rescue(token, to, amount);
     }
 
-    /// @dev BLOCKER(ERG-EXEC-12): see execution/SwapRouterLib.sol
     function executeSwapExactIn(
         address tokenIn,
         address tokenOut,
@@ -57,11 +56,27 @@ contract SwapExecutor is Owned, ReentrancyGuard {
         if (path.length < 2 || path.length > DeskConstants.MAX_PATH_LENGTH) revert InvalidPath();
         if (amountIn == 0) revert ZeroAmount();
 
-        tokenIn;
-        tokenOut;
-        minAmountOut;
-        path;
-        amountOut;
-        revert NotImplemented("executeSwapExactIn");
+        // Pull tokens from caller
+        IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+
+        // Approve router
+        IERC20(tokenIn).approve(address(router), amountIn);
+
+        // Execute swap
+        amountOut = SwapRouterLib.swapExactIn(
+            address(router),
+            path,
+            amountIn,
+            minAmountOut,
+            deadline
+        );
+
+        // Return tokens to caller
+        IERC20(tokenOut).transfer(msg.sender, amountOut);
+
+        if (amountOut < minAmountOut) revert SlippageExceeded();
+
+        emit SwapExecuted(msg.sender, tokenIn, tokenOut, amountIn, amountOut);
+        return amountOut;
     }
 }
